@@ -1296,7 +1296,7 @@ export default function Home() {
                 </Link>
               </h1>
               <p className="text-sm leading-relaxed text-zinc-400 sm:text-[15px]">
-                패배는 전부 내 탓이 아닙니다.
+                남탓을 하고 싶으신가요? 검색을 시작해보세요.
               </p>
             </div>
             <SummonerSearchBar {...searchBarProps} size="hero" />

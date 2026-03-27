@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "MDG.GG",
+  title: "MD.GG",
   description: "전적 검색, 재미 칭호, 라인별 스코어보드",
 };
 
