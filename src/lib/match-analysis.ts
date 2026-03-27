@@ -55,7 +55,8 @@ export function performanceScore(p: MatchParticipantDto): number {
     const heal = (p.totalHeal ?? 0) / 900;
     const dmgPart = dmg / 2200;
     const vis = (p.visionScore ?? 0) / 52;
-    return shared * 0.4 + cc + shield + heal + dmgPart + vis * 0.75;
+    const raw = shared * 0.38 + cc * 0.92 + shield * 0.9 + heal * 0.9 + dmgPart + vis * 0.68;
+    return raw * 0.9;
   }
 
   if (pos === "JUNGLE") {
@@ -137,16 +138,23 @@ function computeInbunPortion(
   const hlPart = (p.totalHeal ?? 0) / Math.max(1e-6, avgHeal);
   const kpPart = kp / Math.max(1e-6, avgKp);
 
-  return (
-    0.02 * dmgPart +
-    0.21 * astPart +
-    0.23 * visPart +
-    0.11 * ccPart +
-    0.08 * shPart +
-    0.07 * hlPart +
-    0.14 * kpPart +
-    0.14 * deathPart
-  );
+  const teamParts = parts.filter((x) => x.teamId === p.teamId);
+  const teamDeathAvg =
+    teamParts.reduce((s, x) => s + x.deaths, 0) / Math.max(1, teamParts.length);
+  const deathOver = Math.max(0, p.deaths - teamDeathAvg);
+  const deathNerf = 1 - Math.min(0.1, deathOver * 0.028);
+
+  const base =
+    0.05 * dmgPart +
+    0.17 * astPart +
+    0.19 * visPart +
+    0.09 * ccPart +
+    0.06 * shPart +
+    0.06 * hlPart +
+    0.12 * kpPart +
+    0.12 * deathPart;
+
+  return base * deathNerf * 0.94;
 }
 
 export interface ParticipantSummary {
@@ -521,20 +529,26 @@ function buildLaneRows(
   return rows;
 }
 
+/** 승리팀 MVP: 인분(damagePortion) 최고 — 표·순위와 동일 기준 */
 function pickCarry(
   team: MatchParticipantDto[],
-  displayMap: Map<string, number>
+  summaryByPuuid: Map<string, ParticipantSummary>
 ): PlayerHighlight | null {
   if (team.length === 0) return null;
-  let best = team[0];
-  let bestScore = performanceScore(best);
-  for (let i = 1; i < team.length; i++) {
-    const s = performanceScore(team[i]);
-    if (s > bestScore) {
-      best = team[i];
-      bestScore = s;
-    }
-  }
+  const sorted = [...team].sort((a, b) => {
+    const sa = summaryByPuuid.get(a.puuid)!;
+    const sb = summaryByPuuid.get(b.puuid)!;
+    const d = sb.damagePortion - sa.damagePortion;
+    if (Math.abs(d) > 1e-9) return d;
+    const ds = sb.displayScore - sa.displayScore;
+    if (Math.abs(ds) > 1e-9) return ds;
+    const s = sb.score - sa.score;
+    if (Math.abs(s) > 1e-9) return s;
+    return a.puuid.localeCompare(b.puuid);
+  });
+  const best = sorted[0]!;
+  const bestScore = performanceScore(best);
+  const summ = summaryByPuuid.get(best.puuid)!;
   return {
     puuid: best.puuid,
     displayName: displayName(best),
@@ -545,25 +559,31 @@ function pickCarry(
     assists: best.assists,
     teamId: best.teamId,
     score: Math.round(bestScore * 100) / 100,
-    displayScore: displayMap.get(best.puuid) ?? 0,
+    displayScore: summ.displayScore,
     funTitles: ["MVP"],
   };
 }
 
+/** 패배팀 범인: 인분(damagePortion) 최저 — 표·순위와 동일 기준 */
 function pickBlame(
   team: MatchParticipantDto[],
-  displayMap: Map<string, number>
+  summaryByPuuid: Map<string, ParticipantSummary>
 ): PlayerHighlight | null {
   if (team.length === 0) return null;
-  let worst = team[0];
-  let worstScore = performanceScore(worst);
-  for (let i = 1; i < team.length; i++) {
-    const s = performanceScore(team[i]);
-    if (s < worstScore) {
-      worst = team[i];
-      worstScore = s;
-    }
-  }
+  const sorted = [...team].sort((a, b) => {
+    const sa = summaryByPuuid.get(a.puuid)!;
+    const sb = summaryByPuuid.get(b.puuid)!;
+    const d = sa.damagePortion - sb.damagePortion;
+    if (Math.abs(d) > 1e-9) return d;
+    const ds = sa.displayScore - sb.displayScore;
+    if (Math.abs(ds) > 1e-9) return ds;
+    const s = sa.score - sb.score;
+    if (Math.abs(s) > 1e-9) return s;
+    return a.puuid.localeCompare(b.puuid);
+  });
+  const worst = sorted[0]!;
+  const worstScore = performanceScore(worst);
+  const summ = summaryByPuuid.get(worst.puuid)!;
   return {
     puuid: worst.puuid,
     displayName: displayName(worst),
@@ -574,7 +594,7 @@ function pickBlame(
     assists: worst.assists,
     teamId: worst.teamId,
     score: Math.round(worstScore * 100) / 100,
-    displayScore: displayMap.get(worst.puuid) ?? 0,
+    displayScore: summ.displayScore,
     funTitles: ["범인"],
   };
 }
@@ -585,7 +605,14 @@ function enrichHighlight(
 ): PlayerHighlight | null {
   if (!h) return null;
   const s = summaryByPuuid.get(h.puuid);
-  return { ...h, funTitles: s?.funTitles?.length ? s.funTitles : h.funTitles };
+  const special = h.funTitles?.[0];
+  const isSpecial = special === "MVP" || special === "범인";
+  const derived = s?.funTitles ?? [];
+  if (!isSpecial) {
+    return { ...h, funTitles: derived.length ? derived : h.funTitles };
+  }
+  const rest = derived.filter((t) => t !== special);
+  return { ...h, funTitles: [special, ...rest] };
 }
 
 const REMAKE_SEC = 300;
@@ -705,11 +732,11 @@ export function analyzeMatch(
   }
 
   const carry = enrichHighlight(
-    pickCarry(winningPlayers, displayMap),
+    pickCarry(winningPlayers, summaryByPuuid),
     summaryByPuuid
   );
   const blame = enrichHighlight(
-    pickBlame(losingPlayers, displayMap),
+    pickBlame(losingPlayers, summaryByPuuid),
     summaryByPuuid
   );
 
