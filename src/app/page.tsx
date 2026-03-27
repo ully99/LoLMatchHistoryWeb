@@ -1050,16 +1050,20 @@ function MatchLaneBlock({
 }
 
 function SummonerSearchBar({
-  q,
-  onQChange,
+  gameName,
+  onGameNameChange,
+  tagLine,
+  onTagLineChange,
   region,
   onRegionChange,
   loading,
   onSearch,
   size = "hero",
 }: {
-  q: string;
-  onQChange: (v: string) => void;
+  gameName: string;
+  onGameNameChange: (v: string) => void;
+  tagLine: string;
+  onTagLineChange: (v: string) => void;
   region: string;
   onRegionChange: (v: string) => void;
   loading: boolean;
@@ -1099,14 +1103,30 @@ function SummonerSearchBar({
       </div>
       <input
         type="text"
-        value={q}
-        onChange={(e) => onQChange(e.target.value)}
+        value={gameName}
+        onChange={(e) => onGameNameChange(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && onSearch()}
-        placeholder="소환사명 또는 Hide on bush#KR1"
+        placeholder="소환사명"
         autoComplete="off"
+        aria-label="소환사명"
         enterKeyHint="search"
         className={`min-w-0 flex-1 border-0 bg-transparent text-zinc-900 outline-none ring-0 placeholder:text-zinc-400 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 ${
-          hero ? "px-4 text-base" : "px-3 text-sm"
+          hero ? "px-3 text-base sm:px-4" : "px-2 text-sm sm:px-3"
+        }`}
+      />
+      <div className="flex shrink-0 items-center px-0.5 text-zinc-400 select-none" aria-hidden>
+        #
+      </div>
+      <input
+        type="text"
+        value={tagLine}
+        onChange={(e) => onTagLineChange(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && onSearch()}
+        placeholder={hero ? "KR1" : "태그"}
+        autoComplete="off"
+        aria-label="Riot 태그"
+        className={`w-[4.5rem] shrink-0 border-0 bg-transparent text-zinc-900 outline-none ring-0 placeholder:text-zinc-400 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 sm:w-[5.25rem] ${
+          hero ? "px-1 text-base" : "px-1 text-sm"
         }`}
       />
       <button
@@ -1145,7 +1165,8 @@ function SummonerSearchBar({
 }
 
 export default function Home() {
-  const [q, setQ] = useState("");
+  const [gameName, setGameName] = useState("");
+  const [tagLine, setTagLine] = useState("");
   const [region, setRegion] = useState("kr");
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<SearchResponse | null>(null);
@@ -1207,10 +1228,35 @@ export default function Home() {
 
   const runSearch = useCallback(
     async (nextQ?: string, forceRefresh = false) => {
-      const query = (nextQ !== undefined ? nextQ : q).trim();
+      let query: string;
+      if (nextQ !== undefined) {
+        const t = nextQ.trim();
+        if (!t) return;
+        const h = t.indexOf("#");
+        if (h > 0) {
+          setGameName(t.slice(0, h).trim());
+          setTagLine(t.slice(h + 1).trim());
+          query = t;
+        } else {
+          setGameName(t);
+          setTagLine("");
+          query = t;
+        }
+      } else {
+        const g = gameName.trim();
+        const tag = tagLine.trim();
+        if (!g) return;
+        if (!tag) {
+          setData({
+            error: "Riot ID 태그를 입력해 주세요. (예: KR1)",
+            matches: [],
+          });
+          return;
+        }
+        query = `${g}#${tag}`;
+      }
       if (!query) return;
       if (forceRefresh && !canRefresh) return;
-      if (nextQ !== undefined) setQ(nextQ);
       if (forceRefresh) setLastRefreshAt(Date.now());
       setLoadedCount(MATCH_PAGE_SIZE);
       setLoading(true);
@@ -1235,7 +1281,7 @@ export default function Home() {
         setLoading(false);
       }
     },
-    [canRefresh, q, region, data]
+    [canRefresh, gameName, tagLine, region, data]
   );
 
   const matchesForTab = useMemo(() => {
@@ -1250,9 +1296,18 @@ export default function Home() {
     [matchesForTab, data?.puuid]
   );
 
+  /** API `q` — 태그 있으면 `닉#태그`, 없으면 구형 소환사명만 */
+  const searchQueryParam = useMemo(() => {
+    const g = gameName.trim();
+    const t = tagLine.trim();
+    if (!g) return "";
+    return t ? `${g}#${t}` : g;
+  }, [gameName, tagLine]);
+
   const goHome = useCallback(() => {
     setData(null);
-    setQ("");
+    setGameName("");
+    setTagLine("");
     setLoading(false);
     setLoadedCount(MATCH_PAGE_SIZE);
     setTimelineByMatch({});
@@ -1272,8 +1327,10 @@ export default function Home() {
 
   const hasProfile = Boolean(data?.displayName);
   const searchBarProps = {
-    q,
-    onQChange: setQ,
+    gameName,
+    onGameNameChange: setGameName,
+    tagLine,
+    onTagLineChange: setTagLine,
     region,
     onRegionChange: setRegion,
     loading,
@@ -1367,7 +1424,7 @@ export default function Home() {
                   <button
                     type="button"
                     onClick={() => runSearch(undefined, true)}
-                    disabled={loading || !q.trim() || !canRefresh}
+                    disabled={loading || !searchQueryParam || !canRefresh}
                     className="mt-0.5 w-fit min-h-9 min-w-[6.5rem] rounded-md border border-white/20 bg-zinc-900/80 px-4 py-1.5 text-sm font-semibold text-zinc-200 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {canRefresh ? "갱신" : `갱신 ${remainingRefreshSec}s`}
@@ -1996,14 +2053,14 @@ export default function Home() {
               <button
                 type="button"
             onClick={async () => {
-              if (!q.trim()) return;
+              if (!searchQueryParam) return;
               if (loading) return;
               if (loadedCount >= 100) return;
               try {
                 // 기존 목록에서 이어 붙이기(append)용: start=현재 요청 시작 오프셋
                 setLoading(true);
                 const params = new URLSearchParams({
-                  q,
+                  q: searchQueryParam,
                   region,
                   count: "10",
                   start: String(loadedCount),
@@ -2025,7 +2082,7 @@ export default function Home() {
                 setLoading(false);
               }
             }}
-            disabled={loading || loadedCount >= 100 || !q.trim()}
+            disabled={loading || loadedCount >= 100 || !searchQueryParam}
                 className="rounded border border-white/20 bg-zinc-900/30 px-4 py-2 text-sm font-semibold text-zinc-200 hover:bg-zinc-900/50 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 더보기
